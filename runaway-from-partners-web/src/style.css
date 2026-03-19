@@ -1,0 +1,200 @@
+:root {
+  --bg: #08090d;
+  --border: rgba(209, 191, 152, 0.22);
+  --text: #f0e6cf;
+  --muted: #b9af98;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: radial-gradient(circle at 30% 20%, #1f2330 0%, var(--bg) 60%);
+  color: var(--text);
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+#game {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  backdrop-filter: blur(4px);
+  background: radial-gradient(circle at center, rgba(0, 0, 0, 0.45) 0%, rgba(0, 0, 0, 0.82) 75%);
+  z-index: 10;
+}
+
+.panel,
+.note-card {
+  width: min(92vw, 650px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(26, 27, 34, 0.96), rgba(14, 15, 20, 0.95));
+  padding: 2rem;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+
+h1,
+h2 {
+  margin: 0.45rem 0 0.75rem;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 600;
+}
+
+.lead {
+  margin: 0 0 1.2rem;
+  color: #e8dec8;
+  line-height: 1.4;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid rgba(233, 217, 178, 0.35);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(88, 75, 57, 0.95), rgba(53, 44, 33, 0.95));
+  color: var(--text);
+  font-size: 1rem;
+  padding: 0.72rem 1.35rem;
+}
+
+button:hover {
+  filter: brightness(1.1);
+}
+
+.hint {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+#crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+}
+
+#crosshair::before,
+#crosshair::after {
+  content: "";
+  position: absolute;
+  background: rgba(238, 224, 188, 0.8);
+}
+
+#crosshair::before {
+  left: 8px;
+  top: 2px;
+  width: 2px;
+  height: 14px;
+}
+
+#crosshair::after {
+  top: 8px;
+  left: 2px;
+  width: 14px;
+  height: 2px;
+}
+
+#prompt {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 34px);
+  transform: translateX(-50%);
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(240, 228, 196, 0.28);
+  background: rgba(10, 10, 14, 0.78);
+  font-size: 0.9rem;
+}
+
+#inventory {
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid rgba(240, 228, 196, 0.2);
+  background: rgba(8, 8, 12, 0.74);
+  color: #e7ddc6;
+  font-size: 0.88rem;
+}
+
+#toast {
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  border: 1px solid rgba(193, 89, 89, 0.35);
+  background: rgba(45, 20, 20, 0.9);
+  color: #ffe4d6;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.9rem;
+}
+
+#dialogue {
+  position: absolute;
+  left: 50%;
+  bottom: 2.4rem;
+  transform: translateX(-50%);
+  width: min(90vw, 900px);
+  min-height: 2.5rem;
+  border-radius: 10px;
+  border: 1px solid rgba(166, 194, 156, 0.32);
+  background: rgba(6, 12, 8, 0.82);
+  color: #def8d2;
+  font-family: "Courier New", monospace;
+  font-size: 1rem;
+  line-height: 1.4;
+  padding: 0.7rem 0.9rem;
+  text-shadow: 0 0 10px rgba(125, 228, 117, 0.35);
+}
+
+.note-card p {
+  margin: 0 0 1.1rem;
+  line-height: 1.5;
+  color: #efe4cc;
+}
+
+.hidden {
+  display: none !important;
+}
+
+@media (max-width: 700px) {
+  .panel,
+  .note-card {
+    padding: 1.3rem;
+  }
+
+  h1 {
+    font-size: 1.6rem;
+  }
+
+  #dialogue {
+    bottom: 1.2rem;
+    font-size: 0.9rem;
+  }
+}

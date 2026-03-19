@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Убеги от партнёров</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="menu" class="overlay">
+      <div class="panel">
+        <h1>Убеги от партнёров</h1>
+        <p class="lead">Проснись, осмотрись, найди записку и забери чемодан.</p>
+        <button id="startButton" type="button">Начать игру</button>
+        <p class="hint">WASD — движение, мышь — обзор, F — взаимодействие, Esc/Tab — освободить курсор (удобно для Cmd+Tab на macOS)</p>
+      </div>
+    </div>
+
+    <div id="hud" class="hidden" aria-hidden="true">
+      <div id="crosshair"></div>
+      <div id="prompt" class="hidden"></div>
+      <div id="inventory" class="hidden">Инвентарь: пусто</div>
+      <div id="toast" class="hidden"></div>
+      <div id="dialogue" class="hidden"></div>
+    </div>
+
+    <div id="noteOverlay" class="overlay hidden" aria-modal="true" role="dialog">
+      <div class="note-card">
+        <h2>Записка</h2>
+        <p id="noteMessage">
+          Привет, учредитель Natlex. Спасибо за твою работу, но пора платить по счетам и заплатить партнёрам.
+          Мы скоро придём......
+        </p>
+        <button id="closeNoteButton" type="button">Закрыть</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
