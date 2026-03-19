@@ -133,7 +133,7 @@ button:hover {
 #inventory,
 #money {
   position: absolute;
-  bottom: 1rem;
+  bottom: 1.85rem;
   padding: 0.55rem 0.7rem;
   border-radius: 8px;
   border: 1px solid rgba(240, 228, 196, 0.2);
@@ -144,6 +144,16 @@ button:hover {
 
 #inventory {
   left: 1rem;
+}
+
+#version {
+  position: absolute;
+  left: 1rem;
+  bottom: 0.45rem;
+  color: rgba(223, 214, 194, 0.72);
+  font-size: 0.73rem;
+  letter-spacing: 0.03em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
 #money {
@@ -217,12 +227,18 @@ button:hover {
 
   #inventory,
   #money {
-    bottom: 1rem;
+    bottom: 1.65rem;
     font-size: 0.8rem;
   }
 
   #inventory {
     left: 0.5rem;
+  }
+
+  #version {
+    left: 0.5rem;
+    bottom: 0.35rem;
+    font-size: 0.68rem;
   }
 
   #money {
