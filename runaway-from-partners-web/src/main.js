@@ -73,6 +73,8 @@ const SOUND_ASSET_URLS = {
   typing: 'https://actions.google.com/sounds/v1/office/keyboard_typing_fast.ogg'
 };
 const BACKGROUND_MUSIC_URL = 'https://actions.google.com/sounds/v1/horror/ambient_hum_pitched.ogg';
+const LEO_FACE_IMAGE_URL = new URL('../LLL.png', import.meta.url).href;
+const KEYCARD_CHASE_TIME_LIMIT_SEC = 20;
 
 const gameState = {
   hasStarted: false,
@@ -87,7 +89,9 @@ const gameState = {
   money: 0,
   hits: 0,
   gameEnded: false,
-  activeJump: null
+  activeJump: null,
+  chaseActive: false,
+  chaseTimeLeftSec: 0
 };
 
 const interactive = {
@@ -96,7 +100,8 @@ const interactive = {
   heldSuitcase: null,
   entryDoor: null,
   keycard: null,
-  exitDoor: null
+  exitDoor: null,
+  chaserFace: null
 };
 
 const corridorState = {
@@ -130,10 +135,12 @@ let sneezePlayed = false;
 let sneezeDueSec = 0;
 let activeTypingAudio = null;
 let mainDoorCreakPlayed = false;
+let chaseToastMark = -1;
 
 const noteTexture = createNoteTexture();
 const euroTexture = createEuroTexture();
 const keycardTexture = createKeycardTexture();
+const leoFaceTexture = createLeoFaceTexture();
 const soundBank = createSoundBank();
 const backgroundMusic = createBackgroundMusic();
 
@@ -465,6 +472,14 @@ function createKeycardTexture() {
   return texture;
 }
 
+function createLeoFaceTexture() {
+  const texture = new THREE.TextureLoader().load(LEO_FACE_IMAGE_URL);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
+}
+
 function createBed() {
   const bed = new THREE.Group();
 
@@ -714,6 +729,7 @@ function createCorridor() {
   placeKeycard(corridorGroup);
   buildExitDoor(corridorGroup);
   createPartnerEvents();
+  createChaserFace();
 
   return corridorGroup;
 }
@@ -850,44 +866,26 @@ function generatePartnerNames(count) {
 }
 
 function createScreamerFace() {
-  const faceCanvas = document.createElement('canvas');
-  faceCanvas.width = 512;
-  faceCanvas.height = 512;
-
-  const ctx = faceCanvas.getContext('2d');
-  ctx.fillStyle = 'rgba(12, 12, 16, 0.0)';
-  ctx.fillRect(0, 0, 512, 512);
-
-  ctx.fillStyle = '#0c0d11';
-  ctx.beginPath();
-  ctx.ellipse(256, 260, 150, 185, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#171922';
-  ctx.beginPath();
-  ctx.ellipse(256, 260, 128, 165, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#ff3d3d';
-  ctx.beginPath();
-  ctx.arc(206, 230, 22, 0, Math.PI * 2);
-  ctx.arc(306, 230, 22, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#0a0000';
-  ctx.beginPath();
-  ctx.ellipse(256, 318, 46, 66, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  const faceTexture = new THREE.CanvasTexture(faceCanvas);
-  faceTexture.colorSpace = THREE.SRGBColorSpace;
-
   const faceMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(0.56, 0.72),
-    new THREE.MeshBasicMaterial({ map: faceTexture, transparent: true })
+    new THREE.MeshBasicMaterial({
+      map: leoFaceTexture,
+      transparent: true,
+      alphaTest: 0.05,
+      side: THREE.DoubleSide
+    })
   );
 
   return faceMesh;
+}
+
+function createChaserFace() {
+  const chaser = createScreamerFace();
+  chaser.scale.set(1.5, 1.5, 1.5);
+  chaser.visible = false;
+  chaser.position.set(0, 1.35, corridor.startZ + 2);
+  scene.add(chaser);
+  interactive.chaserFace = chaser;
 }
 
 function registerEvents() {
@@ -1046,6 +1044,7 @@ function pickUpKeycard() {
   interactive.keycard.visible = false;
   updateInventoryText();
   showToast('Служебная карта найдена. Теперь можно открыть аварийный выход.');
+  startKeycardChase();
 }
 
 function runPostNoteSequence() {
@@ -1096,6 +1095,30 @@ function tryOpenExitDoor() {
   gameState.maxZ = corridor.startZ + corridor.length + 3.2;
 
   showToast('Аварийный выход открыт. Беги!');
+}
+
+function startKeycardChase() {
+  if (gameState.chaseActive || gameState.gameEnded) {
+    return;
+  }
+
+  gameState.chaseActive = true;
+  gameState.chaseTimeLeftSec = KEYCARD_CHASE_TIME_LIMIT_SEC;
+  chaseToastMark = -1;
+
+  const chaser = interactive.chaserFace;
+  if (chaser) {
+    chaser.visible = true;
+    chaser.position.set(
+      THREE.MathUtils.clamp(camera.position.x, -corridor.width / 2 + 0.4, corridor.width / 2 - 0.4),
+      1.35,
+      Math.max(corridor.startZ + 0.7, camera.position.z - 4.6)
+    );
+    chaser.lookAt(camera.position.x, 1.35, camera.position.z + 1.2);
+  }
+
+  enqueueDialogue('Leo: Я иду за тобой. Добеги до выхода, если успеешь.', 26, 1000);
+  showToast('После карты началась погоня. Беги к аварийному выходу.');
 }
 
 function updateInventoryText() {
@@ -1273,6 +1296,51 @@ function updateNarrativeProgress() {
   }
 }
 
+function updateChase(delta) {
+  if (!gameState.chaseActive || gameState.gameEnded) {
+    return;
+  }
+
+  const chaser = interactive.chaserFace;
+  if (!chaser) {
+    return;
+  }
+
+  gameState.chaseTimeLeftSec = Math.max(0, gameState.chaseTimeLeftSec - delta);
+  const timeLeftRounded = Math.ceil(gameState.chaseTimeLeftSec);
+
+  if (timeLeftRounded <= 10 && timeLeftRounded > 0 && timeLeftRounded % 2 === 0 && chaseToastMark !== timeLeftRounded) {
+    chaseToastMark = timeLeftRounded;
+    showToast(`Успей добежать: ${timeLeftRounded} сек.`);
+  }
+
+  if (gameState.chaseTimeLeftSec <= 0) {
+    triggerLoseEnding('timeout');
+    return;
+  }
+
+  const desiredX = THREE.MathUtils.clamp(camera.position.x, -corridor.width / 2 + 0.35, corridor.width / 2 - 0.35);
+  const desiredZ = camera.position.z - 0.35;
+  const dx = desiredX - chaser.position.x;
+  const dz = desiredZ - chaser.position.z;
+  const distance = Math.hypot(dx, dz);
+
+  if (distance > 0.0001) {
+    const urgency = 1 - gameState.chaseTimeLeftSec / KEYCARD_CHASE_TIME_LIMIT_SEC;
+    const speed = THREE.MathUtils.lerp(1.6, 3.1, urgency);
+    const step = Math.min(speed * delta, distance);
+    chaser.position.x += (dx / distance) * step;
+    chaser.position.z += (dz / distance) * step;
+  }
+
+  chaser.lookAt(camera.position.x, 1.35, camera.position.z);
+
+  const catchDistance = Math.hypot(chaser.position.x - camera.position.x, chaser.position.z - camera.position.z);
+  if (catchDistance < 0.72) {
+    triggerLoseEnding('caught');
+  }
+}
+
 function updateJumpscares(delta) {
   if (!gameState.doorOpened || gameState.gameEnded) {
     return;
@@ -1382,6 +1450,10 @@ function triggerWinEnding() {
   }
 
   gameState.gameEnded = true;
+  gameState.chaseActive = false;
+  if (interactive.chaserFace) {
+    interactive.chaserFace.visible = false;
+  }
   promptEl.classList.add('hidden');
   controls.unlock();
 
@@ -1394,7 +1466,7 @@ function triggerWinEnding() {
   });
 }
 
-function triggerLoseEnding() {
+function triggerLoseEnding(reason = 'money') {
   if (gameState.gameEnded) {
     return;
   }
@@ -1405,6 +1477,7 @@ function triggerLoseEnding() {
   }
 
   gameState.gameEnded = true;
+  gameState.chaseActive = false;
   gameState.money = 0;
   updateMoneyHud();
 
@@ -1415,9 +1488,20 @@ function triggerLoseEnding() {
   inventoryEl.textContent = 'Инвентарь: пусто';
 
   controls.unlock();
+  if (interactive.chaserFace) {
+    interactive.chaserFace.visible = false;
+  }
 
-  endingTitleEl.textContent = 'Партнёры перехватили тебя';
-  endingTextEl.textContent = 'После трёх скример-встреч деньги ушли партнёрам. Чемодан потерян. Плохая концовка.';
+  if (reason === 'caught') {
+    endingTitleEl.textContent = 'Leo догнал тебя';
+    endingTextEl.textContent = 'После взятия карты началась погоня. Ты не смог оторваться и потерял чемодан.';
+  } else if (reason === 'timeout') {
+    endingTitleEl.textContent = 'Ты не успел добежать';
+    endingTextEl.textContent = 'Погоня после взятия карты затянулась. Время вышло, партнёры забрали деньги.';
+  } else {
+    endingTitleEl.textContent = 'Партнёры перехватили тебя';
+    endingTextEl.textContent = 'После трёх скример-встреч деньги ушли партнёрам. Чемодан потерян. Плохая концовка.';
+  }
   endingOverlayEl.classList.remove('hidden');
   menuEl.classList.add('hidden');
   promptEl.classList.add('hidden');
@@ -1614,6 +1698,7 @@ function animate() {
   updateDoorAnimation(delta);
   updateInteractionPrompt();
   updateNarrativeProgress();
+  updateChase(delta);
   updateJumpscares(delta);
 
   renderer.render(scene, camera);
