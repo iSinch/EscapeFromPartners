@@ -3,20 +3,27 @@ import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockCont
 
 const canvas = document.querySelector('#game');
 const menuEl = document.querySelector('#menu');
+const menuLeadEl = document.querySelector('#menuLead');
 const startButtonEl = document.querySelector('#startButton');
 const hudEl = document.querySelector('#hud');
 const promptEl = document.querySelector('#prompt');
 const inventoryEl = document.querySelector('#inventory');
+const moneyEl = document.querySelector('#money');
 const toastEl = document.querySelector('#toast');
 const dialogueEl = document.querySelector('#dialogue');
+const flashEl = document.querySelector('#flash');
 const noteOverlayEl = document.querySelector('#noteOverlay');
 const closeNoteButtonEl = document.querySelector('#closeNoteButton');
+const endingOverlayEl = document.querySelector('#endingOverlay');
+const endingTitleEl = document.querySelector('#endingTitle');
+const endingTextEl = document.querySelector('#endingText');
+const restartButtonEl = document.querySelector('#restartButton');
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0b10);
 scene.fog = new THREE.FogExp2(0x07080d, 0.09);
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 140);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 160);
 camera.position.set(0, 1.65, 3.7);
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -44,9 +51,11 @@ const room = {
 
 const corridor = {
   width: 3.5,
-  height: 3.0,
+  height: 3,
   length: 24,
-  startZ: room.depth / 2 + 0.04
+  startZ: room.depth / 2 + 0.04,
+  exitDoorWidth: 1.35,
+  exitDoorHeight: 2.25
 };
 
 const keys = {
@@ -56,39 +65,77 @@ const keys = {
   right: false
 };
 
+const SOUND_ASSET_URLS = {
+  doorCreak: 'https://actions.google.com/sounds/v1/doors/creaking_wooden_door.ogg',
+  knock: 'https://actions.google.com/sounds/v1/doors/knock_on_wooden_door.ogg',
+  footsteps: 'https://actions.google.com/sounds/v1/foley/distant_footsteps_on_wood.ogg',
+  sneeze: 'https://actions.google.com/sounds/v1/human_voices/male_sneezing_into_arm.ogg',
+  typing: 'https://actions.google.com/sounds/v1/office/keyboard_typing_fast.ogg'
+};
+const BACKGROUND_MUSIC_URL = 'https://actions.google.com/sounds/v1/horror/ambient_hum_pitched.ogg';
+
 const gameState = {
   hasStarted: false,
   isReadingNote: false,
   noteRead: false,
   doorUnlocked: false,
   doorOpened: false,
+  hasKeycard: false,
+  exitOpened: false,
   activePrompt: null,
   maxZ: room.depth / 2 - room.playerRadius,
+  money: 0,
+  hits: 0,
+  gameEnded: false,
   activeJump: null
 };
-
-let velocityX = 0;
-let velocityZ = 0;
-let toastTimeoutId;
-let dialogueIntervalId;
-let dialogueChain = Promise.resolve();
-let audioContext;
-let masterAudioGain;
-let doorPivot;
-let doorTargetAngle = 0;
-let doorCurrentAngle = 0;
 
 const interactive = {
   noteMesh: null,
   worldSuitcase: null,
   heldSuitcase: null,
-  entryDoor: null
+  entryDoor: null,
+  keycard: null,
+  exitDoor: null
 };
 
 const corridorState = {
   doorSlots: [],
+  keycardSlot: null,
   jumpEvents: []
 };
+
+let velocityX = 0;
+let velocityZ = 0;
+let toastTimeoutId;
+let flashTimeoutId;
+let dialogueIntervalId;
+let dialogueChain = Promise.resolve();
+
+let entryDoorPivot;
+let entryDoorTargetAngle = 0;
+let entryDoorCurrentAngle = 0;
+
+let exitDoorPivot;
+let exitDoorTargetAngle = 0;
+let exitDoorCurrentAngle = 0;
+
+let soundUnlocked = false;
+let footstepsTimer = 0;
+let footstepsDistance = 0;
+let lastFootstepX = null;
+let lastFootstepZ = null;
+let gameStartTimestampMs = 0;
+let sneezePlayed = false;
+let sneezeDueSec = 0;
+let activeTypingAudio = null;
+let mainDoorCreakPlayed = false;
+
+const noteTexture = createNoteTexture();
+const euroTexture = createEuroTexture();
+const keycardTexture = createKeycardTexture();
+const soundBank = createSoundBank();
+const backgroundMusic = createBackgroundMusic();
 
 buildScene();
 registerEvents();
@@ -122,13 +169,13 @@ function buildScene() {
 
   buildWalls(wallTexture);
 
-  const ambient = new THREE.AmbientLight(0x4a5168, 0.27);
+  const ambient = new THREE.AmbientLight(0x4f5770, 0.42);
   scene.add(ambient);
 
-  const fill = new THREE.HemisphereLight(0x35415f, 0x1a1714, 0.24);
+  const fill = new THREE.HemisphereLight(0x3a4665, 0x1a1714, 0.38);
   scene.add(fill);
 
-  const moonLight = new THREE.DirectionalLight(0x7481a5, 0.22);
+  const moonLight = new THREE.DirectionalLight(0x7a87af, 0.34);
   moonLight.position.set(-2.6, 3, 2.8);
   moonLight.castShadow = true;
   moonLight.shadow.mapSize.set(1024, 1024);
@@ -205,8 +252,8 @@ function buildWalls(wallTexture) {
 
   scene.add(frameTop, frameLeft, frameRight);
 
-  doorPivot = new THREE.Group();
-  doorPivot.position.set(-room.doorwayWidth / 2, 0, frontZ - 0.025);
+  entryDoorPivot = new THREE.Group();
+  entryDoorPivot.position.set(-room.doorwayWidth / 2, 0, frontZ - 0.025);
 
   const door = new THREE.Mesh(
     new THREE.BoxGeometry(room.doorwayWidth, room.doorwayHeight, 0.06),
@@ -222,49 +269,57 @@ function buildWalls(wallTexture) {
   );
   handle.position.set(room.doorwayWidth - 0.14, room.doorwayHeight / 2, -0.02);
 
-  doorPivot.add(door, handle);
-  scene.add(doorPivot);
+  entryDoorPivot.add(door, handle);
+  scene.add(entryDoorPivot);
 
   interactive.entryDoor = door;
 }
 
 function addWindow() {
   const frame = new THREE.Group();
-  const windowX = room.width / 2 - 0.03;
-  const windowY = 1.85;
-  const windowZ = -1.2;
+  const windowWidth = 1.14;
+  const windowHeight = 0.84;
+  const windowX = -1.45;
+  const windowY = 1.75;
+  const windowZ = -room.depth / 2 + 0.04;
 
-  const borderMaterial = new THREE.MeshStandardMaterial({ color: 0xd6dbe6, roughness: 0.5, metalness: 0.08 });
-  const glassMaterial = new THREE.MeshPhysicalMaterial({
-    color: 0x9db1c8,
-    transmission: 0.5,
+  const borderMaterial = new THREE.MeshStandardMaterial({ color: 0xc8ced9, roughness: 0.48, metalness: 0.08 });
+  const glassMaterial = new THREE.MeshBasicMaterial({
+    color: 0x6f86a5,
     transparent: true,
-    opacity: 0.42,
-    roughness: 0.08,
-    metalness: 0
+    opacity: 0.28
   });
 
-  const verticalA = new THREE.Mesh(new THREE.BoxGeometry(0.02, 1, 0.62), borderMaterial);
-  const verticalB = new THREE.Mesh(new THREE.BoxGeometry(0.02, 1, 0.62), borderMaterial);
-  verticalA.position.set(0, 0, -0.29);
-  verticalB.position.set(0, 0, 0.29);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(windowWidth + 0.12, 0.06, 0.05), borderMaterial);
+  const bottom = new THREE.Mesh(new THREE.BoxGeometry(windowWidth + 0.12, 0.06, 0.05), borderMaterial);
+  const left = new THREE.Mesh(new THREE.BoxGeometry(0.06, windowHeight + 0.12, 0.05), borderMaterial);
+  const right = new THREE.Mesh(new THREE.BoxGeometry(0.06, windowHeight + 0.12, 0.05), borderMaterial);
+  const middleVertical = new THREE.Mesh(new THREE.BoxGeometry(0.04, windowHeight + 0.02, 0.04), borderMaterial);
+  const middleHorizontal = new THREE.Mesh(new THREE.BoxGeometry(windowWidth + 0.02, 0.04, 0.04), borderMaterial);
 
-  const horizontalA = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.62, 0.02), borderMaterial);
-  const horizontalB = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.62, 0.02), borderMaterial);
-  horizontalA.position.set(0, 0.49, 0);
-  horizontalB.position.set(0, -0.49, 0);
+  top.position.y = windowHeight / 2 + 0.03;
+  bottom.position.y = -windowHeight / 2 - 0.03;
+  left.position.x = -windowWidth / 2 - 0.03;
+  right.position.x = windowWidth / 2 + 0.03;
 
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.58, 0.95), glassMaterial);
-  glass.rotation.y = -Math.PI / 2;
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(windowWidth, windowHeight), glassMaterial);
 
-  frame.add(verticalA, verticalB, horizontalA, horizontalB, glass);
+  frame.add(top, bottom, left, right, middleVertical, middleHorizontal, glass);
   frame.position.set(windowX, windowY, windowZ);
+  frame.rotation.y = Math.PI;
   scene.add(frame);
 
-  const moonBeam = new THREE.SpotLight(0x8ea6c7, 0.35, 12, Math.PI / 7, 0.5, 1.4);
-  moonBeam.position.set(windowX + 1.6, windowY + 0.4, windowZ - 0.1);
-  moonBeam.target.position.set(windowX - 1.5, 0.2, windowZ - 0.4);
-  moonBeam.castShadow = false;
+  const outsideDark = new THREE.Mesh(
+    new THREE.PlaneGeometry(windowWidth + 0.55, windowHeight + 0.42),
+    new THREE.MeshBasicMaterial({ color: 0x0b111d })
+  );
+  outsideDark.position.set(windowX, windowY, windowZ - 0.26);
+  outsideDark.rotation.y = Math.PI;
+  scene.add(outsideDark);
+
+  const moonBeam = new THREE.SpotLight(0x8ea6c7, 0.34, 10, Math.PI / 7, 0.45, 1.4);
+  moonBeam.position.set(windowX - 0.3, windowY + 0.35, windowZ - 0.35);
+  moonBeam.target.position.set(windowX - 0.75, 0.35, -2.0);
   scene.add(moonBeam, moonBeam.target);
 }
 
@@ -294,10 +349,9 @@ function addNatlexLogo() {
   );
   logo.position.set(-room.width / 2 + 0.02, 1.88, -2.2);
   logo.rotation.y = Math.PI / 2;
-
   scene.add(logo);
 
-  const logoGlow = new THREE.PointLight(0x8cf2a4, 0.35, 2.5, 2);
+  const logoGlow = new THREE.PointLight(0x8cf2a4, 0.38, 2.5, 2);
   logoGlow.position.set(-room.width / 2 + 0.5, 1.84, -2.2);
   scene.add(logoGlow);
 }
@@ -330,6 +384,84 @@ function createNoiseTexture(hexColor, noiseStrength) {
   texture.wrapT = THREE.RepeatWrapping;
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.needsUpdate = true;
+  return texture;
+}
+
+function createNoteTexture() {
+  const noteCanvas = document.createElement('canvas');
+  noteCanvas.width = 1024;
+  noteCanvas.height = 512;
+
+  const ctx = noteCanvas.getContext('2d');
+  ctx.fillStyle = '#f1e8d1';
+  ctx.fillRect(0, 0, noteCanvas.width, noteCanvas.height);
+
+  ctx.fillStyle = '#8d826e';
+  for (let i = 0; i < 600; i += 1) {
+    ctx.fillRect(Math.random() * noteCanvas.width, Math.random() * noteCanvas.height, 1, 1);
+  }
+
+  ctx.fillStyle = '#332b22';
+  ctx.font = '34px Georgia';
+  const lines = [
+    'Привет, учредитель Natlex.',
+    'Спасибо за работу, но пора',
+    'платить по счетам партнёрам.',
+    'Мы скоро придём......'
+  ];
+
+  lines.forEach((line, index) => {
+    ctx.fillText(line, 50, 90 + index * 95);
+  });
+
+  const texture = new THREE.CanvasTexture(noteCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createEuroTexture() {
+  const euroCanvas = document.createElement('canvas');
+  euroCanvas.width = 320;
+  euroCanvas.height = 320;
+
+  const ctx = euroCanvas.getContext('2d');
+  ctx.clearRect(0, 0, 320, 320);
+  ctx.fillStyle = '#e9d7a1';
+  ctx.font = 'bold 245px Georgia';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#c69a3d';
+  ctx.shadowBlur = 24;
+  ctx.fillText('€', 160, 174);
+
+  const texture = new THREE.CanvasTexture(euroCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createKeycardTexture() {
+  const cardCanvas = document.createElement('canvas');
+  cardCanvas.width = 512;
+  cardCanvas.height = 320;
+
+  const ctx = cardCanvas.getContext('2d');
+  ctx.fillStyle = '#d4e6ff';
+  ctx.fillRect(0, 0, 512, 320);
+
+  ctx.fillStyle = '#9ab2ce';
+  ctx.fillRect(0, 0, 512, 72);
+
+  ctx.fillStyle = '#1f2f45';
+  ctx.font = 'bold 48px Trebuchet MS';
+  ctx.fillText('NATLEX ACCESS', 22, 49);
+
+  ctx.fillStyle = '#3a4e6a';
+  ctx.font = '30px Trebuchet MS';
+  ctx.fillText('SERVICE LEVEL', 22, 126);
+  ctx.fillText('AUTHORIZED', 22, 170);
+
+  const texture = new THREE.CanvasTexture(cardCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
 
@@ -431,12 +563,12 @@ function createTableWithLampAndSuitcase() {
 
   const lampBulb = new THREE.Mesh(
     new THREE.SphereGeometry(0.043, 18, 18),
-    new THREE.MeshStandardMaterial({ color: 0xfff8d5, emissive: 0xffe3aa, emissiveIntensity: 1.1 })
+    new THREE.MeshStandardMaterial({ color: 0xfff8d5, emissive: 0xffe3aa, emissiveIntensity: 1.3 })
   );
-  lampBulb.position.set(-0.39, 1.27, -0.12);
+  lampBulb.position.set(-0.39, 1.28, -0.12);
 
-  const lampLight = new THREE.PointLight(0xffdea0, 2.05, 8.2, 2);
-  lampLight.position.set(-0.39, 1.27, -0.12);
+  const lampLight = new THREE.PointLight(0xffdea0, 3.18, 10.4, 2);
+  lampLight.position.set(-0.39, 1.28, -0.12);
   lampLight.castShadow = true;
   lampLight.shadow.mapSize.set(1024, 1024);
 
@@ -444,12 +576,17 @@ function createTableWithLampAndSuitcase() {
   worldSuitcase.position.set(0.17, 1.05, 0);
 
   const noteMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.33, 0.2),
-    new THREE.MeshStandardMaterial({ color: 0xf1e8d1, roughness: 0.8, side: THREE.DoubleSide })
+    new THREE.PlaneGeometry(0.37, 0.23),
+    new THREE.MeshStandardMaterial({
+      map: noteTexture,
+      color: 0xffffff,
+      roughness: 0.79,
+      side: THREE.DoubleSide
+    })
   );
-  noteMesh.position.set(0.17, 1.235, 0.01);
+  noteMesh.position.set(0.17, 1.237, 0.01);
   noteMesh.rotation.x = -Math.PI / 2;
-  noteMesh.rotation.z = 0.02;
+  noteMesh.rotation.z = 0.015;
   noteMesh.castShadow = true;
 
   interactive.noteMesh = noteMesh;
@@ -490,7 +627,13 @@ function createSuitcaseMesh(scale = 1) {
   handle.position.set(0, 0.24 * scale, 0);
   handle.rotation.x = Math.PI;
 
-  group.add(caseBody, edge, handle);
+  const euroMark = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.25 * scale, 0.25 * scale),
+    new THREE.MeshBasicMaterial({ map: euroTexture, transparent: true })
+  );
+  euroMark.position.set(0, 0.17 * scale, 0.2745 * scale);
+
+  group.add(caseBody, edge, handle, euroMark);
   return group;
 }
 
@@ -510,6 +653,15 @@ function createCorridor() {
   floor.receiveShadow = true;
   corridorGroup.add(floor);
 
+  const outerPad = new THREE.Mesh(
+    new THREE.PlaneGeometry(corridor.width, 4),
+    new THREE.MeshStandardMaterial({ color: 0x10151d, roughness: 0.92 })
+  );
+  outerPad.rotation.x = -Math.PI / 2;
+  outerPad.position.z = corridor.length + 2;
+  outerPad.receiveShadow = true;
+  corridorGroup.add(outerPad);
+
   const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x2d3039, roughness: 0.9 });
 
   const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.08, corridor.height, corridor.length), wallMaterial);
@@ -528,7 +680,7 @@ function createCorridor() {
   corridorGroup.add(leftWall, rightWall, ceiling);
 
   for (let i = 0; i < 5; i += 1) {
-    const light = new THREE.PointLight(0xa4b7cb, 0.22, 7.5, 2.2);
+    const light = new THREE.PointLight(0xa4b7cb, 0.24, 7.7, 2.2);
     light.position.set(0, corridor.height - 0.3, 2.1 + i * 4.8);
     corridorGroup.add(light);
   }
@@ -539,102 +691,237 @@ function createCorridor() {
 
   for (let i = 0; i < slotCountPerSide; i += 1) {
     const z = 2 + i * slotStep;
+
     [1, -1].forEach((side) => {
       const sideDoor = new THREE.Mesh(new THREE.BoxGeometry(0.7, 2.1, 0.05), doorMaterial);
       sideDoor.position.set(side * (corridor.width / 2 - 0.025), 1.05, z);
-      sideDoor.rotation.y = side === 1 ? Math.PI / 2 : -Math.PI / 2;
+      const closedRotation = side === 1 ? Math.PI / 2 : -Math.PI / 2;
+      sideDoor.rotation.y = closedRotation;
       corridorGroup.add(sideDoor);
 
-      corridorState.doorSlots.push({ side, z });
+      corridorState.doorSlots.push({
+        side,
+        z,
+        doorMesh: sideDoor,
+        closedRotation,
+        openRotation: closedRotation + (side === 1 ? -1 : 1) * 0.95,
+        currentRotation: closedRotation,
+        targetRotation: closedRotation
+      });
     });
   }
 
-  createPartnerEvents(corridorGroup);
+  placeKeycard(corridorGroup);
+  buildExitDoor(corridorGroup);
+  createPartnerEvents();
 
   return corridorGroup;
 }
 
-function createPartnerEvents(parentGroup) {
-  const eventCount = 3 + Math.floor(Math.random() * 5);
-  const shuffledSlots = [...corridorState.doorSlots].sort(() => Math.random() - 0.5);
-  const selectedSlots = shuffledSlots.slice(0, eventCount);
-  const names = generatePartnerNames(eventCount);
+function placeKeycard(corridorGroup) {
+  const candidates = corridorState.doorSlots.filter((slot) => slot.z > 6 && slot.z < 14);
+  corridorState.keycardSlot = candidates[Math.floor(Math.random() * candidates.length)] ?? corridorState.doorSlots[2];
+
+  const pedestal = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.8, 0.22),
+    new THREE.MeshStandardMaterial({ color: 0x3a3f4c, roughness: 0.84 })
+  );
+  pedestal.position.set(
+    corridorState.keycardSlot.side * (corridor.width / 2 - 0.23),
+    0.4,
+    corridorState.keycardSlot.z
+  );
+
+  const keycard = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.14, 0.02),
+    new THREE.MeshStandardMaterial({ map: keycardTexture, roughness: 0.5, metalness: 0.06 })
+  );
+  keycard.position.set(
+    corridorState.keycardSlot.side * (corridor.width / 2 - 0.23),
+    0.87,
+    corridorState.keycardSlot.z
+  );
+  keycard.rotation.y = corridorState.keycardSlot.side > 0 ? -Math.PI / 2 : Math.PI / 2;
+  keycard.rotation.x = -0.12;
+  keycard.castShadow = true;
+
+  const cardGlow = new THREE.PointLight(0x9dc4ff, 0.42, 2.4, 2.3);
+  cardGlow.position.copy(keycard.position);
+
+  corridorGroup.add(pedestal, keycard, cardGlow);
+  interactive.keycard = keycard;
+}
+
+function buildExitDoor(corridorGroup) {
+  const frontZ = corridor.length;
+  const wallThickness = 0.08;
+
+  const sideWidth = (corridor.width - corridor.exitDoorWidth) / 2;
+
+  const leftFront = new THREE.Mesh(
+    new THREE.BoxGeometry(sideWidth, corridor.height, wallThickness),
+    new THREE.MeshStandardMaterial({ color: 0x343946, roughness: 0.86 })
+  );
+  leftFront.position.set(-(corridor.exitDoorWidth + sideWidth) / 2, corridor.height / 2, frontZ);
+
+  const rightFront = new THREE.Mesh(
+    new THREE.BoxGeometry(sideWidth, corridor.height, wallThickness),
+    new THREE.MeshStandardMaterial({ color: 0x343946, roughness: 0.86 })
+  );
+  rightFront.position.set((corridor.exitDoorWidth + sideWidth) / 2, corridor.height / 2, frontZ);
+
+  const topFront = new THREE.Mesh(
+    new THREE.BoxGeometry(corridor.exitDoorWidth, corridor.height - corridor.exitDoorHeight, wallThickness),
+    new THREE.MeshStandardMaterial({ color: 0x343946, roughness: 0.86 })
+  );
+  topFront.position.set(
+    0,
+    corridor.exitDoorHeight + (corridor.height - corridor.exitDoorHeight) / 2,
+    frontZ
+  );
+
+  corridorGroup.add(leftFront, rightFront, topFront);
+
+  exitDoorPivot = new THREE.Group();
+  exitDoorPivot.position.set(-corridor.exitDoorWidth / 2, 0, frontZ - 0.025);
+
+  const exitDoor = new THREE.Mesh(
+    new THREE.BoxGeometry(corridor.exitDoorWidth, corridor.exitDoorHeight, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0xdde6f4, roughness: 0.54, metalness: 0.04 })
+  );
+  exitDoor.position.set(corridor.exitDoorWidth / 2, corridor.exitDoorHeight / 2, 0);
+  exitDoor.castShadow = true;
+  exitDoor.receiveShadow = true;
+
+  const exitLabel = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.64, 0.22),
+    new THREE.MeshBasicMaterial({ color: 0x95ff9b })
+  );
+  exitLabel.position.set(corridor.exitDoorWidth / 2, corridor.exitDoorHeight + 0.2, -0.03);
+
+  exitDoorPivot.add(exitDoor, exitLabel);
+  corridorGroup.add(exitDoorPivot);
+  interactive.exitDoor = exitDoor;
+}
+
+function createPartnerEvents() {
+  const eventCount = 2 + Math.floor(Math.random() * 3);
+
+  const blockedKey = `${corridorState.keycardSlot.side}:${corridorState.keycardSlot.z}`;
+  const availableSlots = corridorState.doorSlots.filter((slot) => `${slot.side}:${slot.z}` !== blockedKey);
+
+  const selectedSlots = [...availableSlots]
+    .sort(() => Math.random() - 0.5)
+    .slice(0, eventCount)
+    .sort((a, b) => a.z - b.z);
+
+  const names = generatePartnerNames(selectedSlots.length);
 
   selectedSlots.forEach((slot, index) => {
-    const partnerMesh = createPartnerMesh();
-    partnerMesh.visible = false;
-    partnerMesh.position.set(slot.side * (corridor.width / 2 - 0.2), 0, slot.z + corridor.startZ);
-    scene.add(partnerMesh);
+    const faceMesh = createScreamerFace();
+    faceMesh.visible = false;
+    faceMesh.position.set(slot.side * (corridor.width / 2 - 0.08), 1.25, slot.z + corridor.startZ);
+    faceMesh.rotation.y = slot.side === 1 ? -Math.PI / 2 : Math.PI / 2;
+    scene.add(faceMesh);
 
     corridorState.jumpEvents.push({
       slot,
       triggerZ: slot.z + corridor.startZ - 0.35,
       name: names[index],
-      partnerMesh,
+      faceMesh,
       triggered: false
     });
   });
 }
 
 function generatePartnerNames(count) {
-  const options = ['Leo', 'Maks', 'Artem', 'Ilya', 'Nikita', 'Dima', 'Roman'];
-  const names = [];
-
-  if (Math.random() < 0.85) {
-    names.push('Leo');
-  }
+  const germanPool = ['Klaus', 'Hans', 'Friedrich', 'Wolfgang', 'Matthias', 'Johann', 'Dieter', 'Heinrich', 'Otto', 'Karl'];
+  const names = ['Leo'];
 
   while (names.length < count) {
-    names.push(options[Math.floor(Math.random() * options.length)]);
+    const candidate = germanPool[Math.floor(Math.random() * germanPool.length)];
+
+    if (!names.includes(candidate) || names.length >= germanPool.length) {
+      names.push(candidate);
+    }
   }
 
-  if (!names.includes('Leo') && Math.random() < 0.9) {
-    names[Math.floor(Math.random() * names.length)] = 'Leo';
-  }
-
-  return names.sort(() => Math.random() - 0.5);
+  return names;
 }
 
-function createPartnerMesh() {
-  const group = new THREE.Group();
+function createScreamerFace() {
+  const faceCanvas = document.createElement('canvas');
+  faceCanvas.width = 512;
+  faceCanvas.height = 512;
 
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.5, 1.15, 0.28),
-    new THREE.MeshStandardMaterial({ color: 0x0f1116, roughness: 0.7 })
+  const ctx = faceCanvas.getContext('2d');
+  ctx.fillStyle = 'rgba(12, 12, 16, 0.0)';
+  ctx.fillRect(0, 0, 512, 512);
+
+  ctx.fillStyle = '#0c0d11';
+  ctx.beginPath();
+  ctx.ellipse(256, 260, 150, 185, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#171922';
+  ctx.beginPath();
+  ctx.ellipse(256, 260, 128, 165, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#ff3d3d';
+  ctx.beginPath();
+  ctx.arc(206, 230, 22, 0, Math.PI * 2);
+  ctx.arc(306, 230, 22, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#0a0000';
+  ctx.beginPath();
+  ctx.ellipse(256, 318, 46, 66, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const faceTexture = new THREE.CanvasTexture(faceCanvas);
+  faceTexture.colorSpace = THREE.SRGBColorSpace;
+
+  const faceMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.56, 0.72),
+    new THREE.MeshBasicMaterial({ map: faceTexture, transparent: true })
   );
-  body.position.y = 0.58;
 
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.18, 18, 18),
-    new THREE.MeshStandardMaterial({ color: 0x23252b, roughness: 0.62 })
-  );
-  head.position.y = 1.3;
-
-  const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xff3d3d });
-  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), eyeMaterial);
-  const eyeR = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), eyeMaterial);
-  eyeL.position.set(-0.06, 1.32, 0.16);
-  eyeR.position.set(0.06, 1.32, 0.16);
-
-  group.add(body, head, eyeL, eyeR);
-  return group;
+  return faceMesh;
 }
 
 function registerEvents() {
   startButtonEl.addEventListener('click', () => {
-    gameState.hasStarted = true;
-    hudEl.classList.remove('hidden');
-    menuEl.classList.add('hidden');
-    controls.lock();
-    showToast('Осмотрись. На столе лежит чемодан и записка.');
-    startAmbientAudio();
-  });
-
-  controls.addEventListener('unlock', () => {
-    if (gameState.isReadingNote) {
+    if (gameState.gameEnded) {
       return;
     }
 
+    gameState.hasStarted = true;
+    hudEl.classList.remove('hidden');
+    menuEl.classList.add('hidden');
+    unlockAudio();
+    startBackgroundMusic();
+
+    if (gameStartTimestampMs === 0) {
+      gameStartTimestampMs = performance.now();
+      sneezePlayed = false;
+      sneezeDueSec = THREE.MathUtils.randFloat(22, 62);
+    }
+
+    controls.lock();
+    showToast('Осмотрись. На столе лежит чемодан и записка.');
+  });
+
+  restartButtonEl.addEventListener('click', () => {
+    window.location.reload();
+  });
+
+  controls.addEventListener('unlock', () => {
+    if (gameState.isReadingNote || gameState.gameEnded) {
+      return;
+    }
+
+    menuLeadEl.textContent = 'Пауза. Нажми "Продолжить", чтобы вернуться в игру.';
     menuEl.classList.remove('hidden');
     startButtonEl.textContent = gameState.hasStarted ? 'Продолжить' : 'Начать игру';
   });
@@ -648,12 +935,14 @@ function registerEvents() {
   });
 
   window.addEventListener('keydown', (event) => {
+    unlockAudio();
+
     if (event.code === 'KeyW') keys.forward = true;
     if (event.code === 'KeyS') keys.backward = true;
     if (event.code === 'KeyA') keys.left = true;
     if (event.code === 'KeyD') keys.right = true;
 
-    if (event.code === 'Tab' && controls.isLocked && !gameState.isReadingNote) {
+    if (event.code === 'Tab' && controls.isLocked && !gameState.isReadingNote && !gameState.gameEnded) {
       event.preventDefault();
       controls.unlock();
       showToast('Курсор освобожден. Можно переключиться между окнами (Cmd+Tab).');
@@ -662,6 +951,10 @@ function registerEvents() {
 
     if (event.code === 'KeyF') {
       event.preventDefault();
+
+      if (gameState.gameEnded) {
+        return;
+      }
 
       if (gameState.isReadingNote) {
         closeNote();
@@ -672,14 +965,20 @@ function registerEvents() {
         return;
       }
 
-      ensureAudioContext();
-
       if (gameState.activePrompt.type === 'note') {
         openNote();
       }
 
-      if (gameState.activePrompt.type === 'door') {
+      if (gameState.activePrompt.type === 'entryDoor') {
         openEntryDoor();
+      }
+
+      if (gameState.activePrompt.type === 'keycard') {
+        pickUpKeycard();
+      }
+
+      if (gameState.activePrompt.type === 'exitDoor') {
+        tryOpenExitDoor();
       }
     }
   });
@@ -706,6 +1005,8 @@ function closeNote() {
 
   if (!gameState.noteRead) {
     gameState.noteRead = true;
+    gameState.money = 1_000_000;
+    gameState.hits = 0;
     pickUpSuitcase();
     runPostNoteSequence();
   }
@@ -727,13 +1028,28 @@ function pickUpSuitcase() {
     interactive.heldSuitcase.visible = true;
   }
 
-  inventoryEl.textContent = 'Инвентарь: чемодан с деньгами';
+  updateInventoryText();
+  updateMoneyHud();
+
   inventoryEl.classList.remove('hidden');
-  showToast('Чемодан у тебя. Кажется, за дверью кто-то есть.');
+  moneyEl.classList.remove('hidden');
+
+  showToast('Чемодан у тебя. Баланс: 1.000.000 €');
+}
+
+function pickUpKeycard() {
+  if (gameState.hasKeycard || !interactive.keycard || !interactive.keycard.visible) {
+    return;
+  }
+
+  gameState.hasKeycard = true;
+  interactive.keycard.visible = false;
+  updateInventoryText();
+  showToast('Служебная карта найдена. Теперь можно открыть аварийный выход.');
 }
 
 function runPostNoteSequence() {
-  enqueueDialogue('"Хренушки вам,а не деньги, дорогие ПАРТНЁРЫ"', 36, 1000).then(() => {
+  enqueueDialogue('"Хренушки вам,а не деньги, дорогие ПАРТНЁРЫ"', 35, 1000).then(() => {
     playKnockSound();
     unlockEntryDoor();
   });
@@ -754,10 +1070,54 @@ function openEntryDoor() {
   }
 
   gameState.doorOpened = true;
-  doorTargetAngle = -Math.PI / 2.15;
+  entryDoorTargetAngle = -Math.PI / 2.15;
   gameState.maxZ = corridor.startZ + corridor.length - room.playerRadius;
-  playDoorCreakSound();
-  showToast('Дверь открыта. Впереди длинный тёмный коридор.');
+
+  if (!mainDoorCreakPlayed) {
+    playDoorCreakSound(1);
+    mainDoorCreakPlayed = true;
+  }
+  showToast('Дверь открыта. Впереди длинный слабоосвещенный коридор.');
+}
+
+function tryOpenExitDoor() {
+  if (gameState.exitOpened) {
+    return;
+  }
+
+  if (!gameState.hasKeycard) {
+    showToast('Дверь закрыта. Нужна служебная карта.');
+    enqueueDialogue('Где-то в боковых комнатах должна быть карта...', 30, 800);
+    return;
+  }
+
+  gameState.exitOpened = true;
+  exitDoorTargetAngle = Math.PI / 2.2;
+  gameState.maxZ = corridor.startZ + corridor.length + 3.2;
+
+  showToast('Аварийный выход открыт. Беги!');
+}
+
+function updateInventoryText() {
+  if (!gameState.noteRead) {
+    inventoryEl.textContent = 'Инвентарь: пусто';
+    return;
+  }
+
+  if (gameState.hasKeycard) {
+    inventoryEl.textContent = 'Инвентарь: чемодан, служебная карта';
+    return;
+  }
+
+  inventoryEl.textContent = 'Инвентарь: чемодан с деньгами';
+}
+
+function updateMoneyHud() {
+  moneyEl.textContent = `Баланс: ${formatEuro(gameState.money)} €`;
+}
+
+function formatEuro(value) {
+  return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 
 function enqueueDialogue(text, charDelay = 30, holdMs = 1100) {
@@ -768,8 +1128,10 @@ function enqueueDialogue(text, charDelay = 30, holdMs = 1100) {
 function typeDialogue(text, charDelay, holdMs) {
   return new Promise((resolve) => {
     clearInterval(dialogueIntervalId);
+    stopDialogueTypingSound();
     dialogueEl.classList.remove('hidden');
     dialogueEl.textContent = '';
+    startDialogueTypingSound();
 
     let index = 0;
     dialogueIntervalId = setInterval(() => {
@@ -778,6 +1140,7 @@ function typeDialogue(text, charDelay, holdMs) {
 
       if (index >= text.length) {
         clearInterval(dialogueIntervalId);
+        stopDialogueTypingSound();
         setTimeout(() => {
           dialogueEl.classList.add('hidden');
           resolve();
@@ -788,7 +1151,7 @@ function typeDialogue(text, charDelay, holdMs) {
 }
 
 function updateMovement(delta) {
-  if (!controls.isLocked || gameState.isReadingNote) {
+  if (!controls.isLocked || gameState.isReadingNote || gameState.gameEnded) {
     return;
   }
 
@@ -824,30 +1187,54 @@ function updateMovement(delta) {
 }
 
 function updateDoorAnimation(delta) {
-  if (!doorPivot) {
-    return;
+  if (entryDoorPivot) {
+    entryDoorCurrentAngle += (entryDoorTargetAngle - entryDoorCurrentAngle) * Math.min(8 * delta, 1);
+    entryDoorPivot.rotation.y = entryDoorCurrentAngle;
   }
 
-  doorCurrentAngle += (doorTargetAngle - doorCurrentAngle) * Math.min(8 * delta, 1);
-  doorPivot.rotation.y = doorCurrentAngle;
+  if (exitDoorPivot) {
+    exitDoorCurrentAngle += (exitDoorTargetAngle - exitDoorCurrentAngle) * Math.min(8 * delta, 1);
+    exitDoorPivot.rotation.y = exitDoorCurrentAngle;
+  }
+
+  corridorState.doorSlots.forEach((slot) => {
+    if (!slot.doorMesh) {
+      return;
+    }
+
+    slot.currentRotation += (slot.targetRotation - slot.currentRotation) * Math.min(10 * delta, 1);
+    slot.doorMesh.rotation.y = slot.currentRotation;
+  });
 }
 
 function updateInteractionPrompt() {
   gameState.activePrompt = null;
 
-  if (!controls.isLocked || gameState.isReadingNote) {
+  if (!controls.isLocked || gameState.isReadingNote || gameState.gameEnded) {
     promptEl.classList.add('hidden');
     return;
   }
 
   const candidates = [];
 
-  if (!gameState.noteRead && interactive.noteMesh && interactive.noteMesh.visible) {
+  if (!gameState.noteRead && interactive.noteMesh?.visible) {
     candidates.push({ type: 'note', mesh: interactive.noteMesh, text: 'F — прочитать записку' });
   }
 
   if (gameState.doorUnlocked && !gameState.doorOpened && interactive.entryDoor) {
-    candidates.push({ type: 'door', mesh: interactive.entryDoor, text: 'F — открыть дверь' });
+    candidates.push({ type: 'entryDoor', mesh: interactive.entryDoor, text: 'F — открыть дверь' });
+  }
+
+  if (gameState.doorOpened && !gameState.hasKeycard && interactive.keycard?.visible) {
+    candidates.push({ type: 'keycard', mesh: interactive.keycard, text: 'F — взять служебную карту' });
+  }
+
+  if (gameState.doorOpened && !gameState.gameEnded && interactive.exitDoor) {
+    const label = gameState.hasKeycard
+      ? 'F — открыть аварийный выход'
+      : 'F — дверь закрыта (нужна карта)';
+
+    candidates.push({ type: 'exitDoor', mesh: interactive.exitDoor, text: label });
   }
 
   if (candidates.length === 0) {
@@ -858,13 +1245,10 @@ function updateInteractionPrompt() {
   raycaster.setFromCamera(centerScreen, camera);
 
   let best = null;
+
   candidates.forEach((candidate) => {
     const hit = raycaster.intersectObject(candidate.mesh, true)[0];
-    if (!hit) {
-      return;
-    }
-
-    if (hit.distance > 2.25) {
+    if (!hit || hit.distance > 2.4) {
       return;
     }
 
@@ -883,8 +1267,14 @@ function updateInteractionPrompt() {
   promptEl.classList.remove('hidden');
 }
 
+function updateNarrativeProgress() {
+  if (gameState.exitOpened && camera.position.z > corridor.startZ + corridor.length + 1.5) {
+    triggerWinEnding();
+  }
+}
+
 function updateJumpscares(delta) {
-  if (!gameState.doorOpened) {
+  if (!gameState.doorOpened || gameState.gameEnded) {
     return;
   }
 
@@ -904,37 +1294,135 @@ function updateJumpscares(delta) {
   jump.timer += delta;
 
   const event = jump.event;
-  const mesh = event.partnerMesh;
+  const faceMesh = event.faceMesh;
+  const doorSlot = event.slot;
 
-  const approachDuration = 0.45;
-  const retreatDuration = 0.5;
-  const startX = event.slot.side * (corridor.width / 2 - 0.22);
-  const peakX = event.slot.side * 0.72;
+  const openDuration = 0.18;
+  const approachDuration = 0.22;
+  const holdDuration = 0.85;
+  const retreatDuration = 0.42;
+  const closeDelay = 0.15;
+  const total = openDuration + approachDuration + holdDuration + retreatDuration + closeDelay;
 
-  if (jump.timer < approachDuration) {
-    const t = jump.timer / approachDuration;
-    mesh.position.x = THREE.MathUtils.lerp(startX, peakX, t);
-  } else {
-    const t = Math.min((jump.timer - approachDuration) / retreatDuration, 1);
-    mesh.position.x = THREE.MathUtils.lerp(peakX, startX, t);
+  const startX = doorSlot.side * (corridor.width / 2 - 0.08);
+  const peakX = doorSlot.side * 0.48;
+
+  if (jump.timer <= openDuration + approachDuration + holdDuration + retreatDuration) {
+    doorSlot.targetRotation = doorSlot.openRotation;
   }
 
-  mesh.position.z = event.slot.z + corridor.startZ + Math.sin(jump.timer * 28) * 0.015;
-  mesh.lookAt(camera.position.x, 1.2, camera.position.z);
+  if (jump.timer < openDuration + approachDuration) {
+    const t = Math.max(0, (jump.timer - openDuration) / approachDuration);
+    faceMesh.position.x = THREE.MathUtils.lerp(startX, peakX, t);
+  } else if (jump.timer < openDuration + approachDuration + holdDuration) {
+    faceMesh.position.x = peakX;
+  } else {
+    const t = Math.min((jump.timer - openDuration - approachDuration - holdDuration) / retreatDuration, 1);
+    faceMesh.position.x = THREE.MathUtils.lerp(peakX, startX, t);
+  }
 
-  if (jump.timer >= 1.05) {
-    mesh.visible = false;
+  faceMesh.position.z = event.slot.z + corridor.startZ;
+  faceMesh.lookAt(camera.position.x, 1.25, camera.position.z);
+
+  if (jump.timer >= total) {
+    faceMesh.visible = false;
+    doorSlot.targetRotation = doorSlot.closedRotation;
     gameState.activeJump = null;
   }
 }
 
 function triggerJumpEvent(event) {
   event.triggered = true;
-  event.partnerMesh.visible = true;
+  event.faceMesh.visible = true;
+  event.slot.targetRotation = event.slot.openRotation;
   gameState.activeJump = { event, timer: 0 };
 
+  triggerFlash();
   playJumpscareSound();
-  enqueueDialogue(`${event.name}: ГДЕ НАШИ ДЕНЬГИ?!`, 24, 900);
+  enqueueDialogue(`${event.name}: ГДЕ НАШИ ДЕНЬГИ?!`, 30, 2300);
+
+  applyJumpscarePenalty(event.name);
+}
+
+function applyJumpscarePenalty(name) {
+  if (gameState.money <= 0) {
+    return;
+  }
+
+  gameState.hits += 1;
+  gameState.money = Math.max(0, gameState.money - 300_000);
+  updateMoneyHud();
+
+  showToast(`${name} отжал 300.000 €. Осталось ${formatEuro(gameState.money)} €`);
+
+  if (gameState.hits >= 3 || gameState.money <= 0) {
+    setTimeout(() => {
+      triggerLoseEnding();
+    }, 900);
+  }
+}
+
+function triggerFlash() {
+  clearTimeout(flashTimeoutId);
+  flashEl.classList.remove('hidden');
+
+  flashTimeoutId = setTimeout(() => {
+    flashEl.classList.add('hidden');
+  }, 170);
+}
+
+function triggerWinEnding() {
+  if (gameState.gameEnded) {
+    return;
+  }
+
+  if (!sneezePlayed) {
+    sneezePlayed = true;
+    playSneezeSound();
+  }
+
+  gameState.gameEnded = true;
+  promptEl.classList.add('hidden');
+  controls.unlock();
+
+  enqueueDialogue('......Ну это мне и ребятами на зарплату', 32, 1300).then(() => {
+    endingTitleEl.textContent = 'Ты сбежал';
+    endingTextEl.textContent = `Ты выбрался через аварийный выход с чемоданом. На руках осталось ${formatEuro(gameState.money)} €.`;
+    endingOverlayEl.classList.remove('hidden');
+    menuEl.classList.add('hidden');
+    showToast('Ветка: Убежал');
+  });
+}
+
+function triggerLoseEnding() {
+  if (gameState.gameEnded) {
+    return;
+  }
+
+  if (!sneezePlayed) {
+    sneezePlayed = true;
+    playSneezeSound();
+  }
+
+  gameState.gameEnded = true;
+  gameState.money = 0;
+  updateMoneyHud();
+
+  if (interactive.heldSuitcase) {
+    interactive.heldSuitcase.visible = false;
+  }
+
+  inventoryEl.textContent = 'Инвентарь: пусто';
+
+  controls.unlock();
+
+  endingTitleEl.textContent = 'Партнёры перехватили тебя';
+  endingTextEl.textContent = 'После трёх скример-встреч деньги ушли партнёрам. Чемодан потерян. Плохая концовка.';
+  endingOverlayEl.classList.remove('hidden');
+  menuEl.classList.add('hidden');
+  promptEl.classList.add('hidden');
+
+  showToast('Ветка: Потерял деньги');
 }
 
 function showToast(text) {
@@ -944,128 +1432,169 @@ function showToast(text) {
 
   toastTimeoutId = setTimeout(() => {
     toastEl.classList.add('hidden');
-  }, 2800);
+  }, 3000);
 }
 
-function ensureAudioContext() {
-  if (!audioContext) {
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    masterAudioGain = audioContext.createGain();
-    masterAudioGain.gain.value = 0.08;
-    masterAudioGain.connect(audioContext.destination);
-  }
+function createSoundBank() {
+  const bank = {};
 
-  if (audioContext.state === 'suspended') {
-    audioContext.resume();
-  }
+  Object.entries(SOUND_ASSET_URLS).forEach(([name, url]) => {
+    const sound = new Audio(url);
+    sound.preload = 'auto';
+    bank[name] = sound;
+  });
+
+  return bank;
 }
 
-function startAmbientAudio() {
-  ensureAudioContext();
+function createBackgroundMusic() {
+  const music = new Audio(BACKGROUND_MUSIC_URL);
+  music.preload = 'auto';
+  music.loop = true;
+  music.volume = 0.08;
+  return music;
+}
 
-  if (startAmbientAudio.started) {
+function unlockAudio() {
+  if (soundUnlocked) {
     return;
   }
-  startAmbientAudio.started = true;
 
-  const oscA = audioContext.createOscillator();
-  oscA.type = 'sine';
-  oscA.frequency.value = 57;
+  soundUnlocked = true;
+  Object.values(soundBank).forEach((sound) => sound.load());
+  backgroundMusic.load();
+}
 
-  const oscB = audioContext.createOscillator();
-  oscB.type = 'triangle';
-  oscB.frequency.value = 92;
+function startBackgroundMusic() {
+  if (!soundUnlocked) {
+    return;
+  }
 
-  const gainA = audioContext.createGain();
-  gainA.gain.value = 0.22;
+  if (!backgroundMusic.paused) {
+    return;
+  }
 
-  const gainB = audioContext.createGain();
-  gainB.gain.value = 0.14;
+  backgroundMusic.volume = 0.08;
+  backgroundMusic.play().catch(() => {});
+}
 
-  const lowPass = audioContext.createBiquadFilter();
-  lowPass.type = 'lowpass';
-  lowPass.frequency.value = 240;
+function playSound(name, { volume = 0.7, rate = 1 } = {}) {
+  if (!soundUnlocked) {
+    return;
+  }
 
-  oscA.connect(gainA);
-  oscB.connect(gainB);
-  gainA.connect(lowPass);
-  gainB.connect(lowPass);
-  lowPass.connect(masterAudioGain);
+  const baseSound = soundBank[name];
+  if (!baseSound) {
+    return;
+  }
 
-  oscA.start();
-  oscB.start();
+  const instance = baseSound.cloneNode();
+  instance.volume = THREE.MathUtils.clamp(volume, 0, 1);
+  instance.playbackRate = rate;
+  instance.play().catch(() => {});
+}
+
+function startDialogueTypingSound() {
+  if (!soundUnlocked) {
+    return;
+  }
+
+  const baseSound = soundBank.typing;
+  if (!baseSound) {
+    return;
+  }
+
+  stopDialogueTypingSound();
+  activeTypingAudio = baseSound.cloneNode();
+  activeTypingAudio.volume = 0.24;
+  activeTypingAudio.playbackRate = 1;
+  activeTypingAudio.loop = true;
+  activeTypingAudio.play().catch(() => {});
+}
+
+function stopDialogueTypingSound() {
+  if (!activeTypingAudio) {
+    return;
+  }
+
+  activeTypingAudio.pause();
+  activeTypingAudio.currentTime = 0;
+  activeTypingAudio = null;
 }
 
 function playKnockSound() {
-  ensureAudioContext();
-
-  const now = audioContext.currentTime;
-
-  for (let i = 0; i < 3; i += 1) {
-    const hitTime = now + i * 0.32;
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    osc.type = 'square';
-    osc.frequency.value = 120 - i * 10;
-
-    gain.gain.setValueAtTime(0, hitTime);
-    gain.gain.linearRampToValueAtTime(0.17, hitTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, hitTime + 0.12);
-
-    osc.connect(gain);
-    gain.connect(masterAudioGain);
-
-    osc.start(hitTime);
-    osc.stop(hitTime + 0.14);
-  }
+  playSound('knock', { volume: 0.72, rate: 0.95 });
+  setTimeout(() => playSound('knock', { volume: 0.66, rate: 1.03 }), 255);
 }
 
-function playDoorCreakSound() {
-  ensureAudioContext();
-
-  const now = audioContext.currentTime;
-  const osc = audioContext.createOscillator();
-  osc.type = 'sawtooth';
-
-  const filter = audioContext.createBiquadFilter();
-  filter.type = 'bandpass';
-  filter.frequency.value = 450;
-
-  const gain = audioContext.createGain();
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.08, now + 0.08);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.72);
-
-  osc.frequency.setValueAtTime(300, now);
-  osc.frequency.exponentialRampToValueAtTime(80, now + 0.72);
-
-  osc.connect(filter);
-  filter.connect(gain);
-  gain.connect(masterAudioGain);
-
-  osc.start(now);
-  osc.stop(now + 0.76);
+function playDoorCreakSound(intensity = 1) {
+  playSound('doorCreak', {
+    volume: THREE.MathUtils.clamp(0.58 * intensity, 0, 1),
+    rate: THREE.MathUtils.randFloat(0.9, 1.08)
+  });
 }
 
 function playJumpscareSound() {
-  ensureAudioContext();
+  playSound('knock', { volume: 0.76, rate: 0.82 });
+}
 
-  const now = audioContext.currentTime;
+function playSneezeSound() {
+  playSound('sneeze', {
+    volume: 0.34,
+    rate: THREE.MathUtils.randFloat(0.96, 1.04)
+  });
+}
 
-  const osc = audioContext.createOscillator();
-  osc.type = 'triangle';
-  osc.frequency.setValueAtTime(220, now);
-  osc.frequency.exponentialRampToValueAtTime(430, now + 0.22);
+function updateRandomSneeze() {
+  if (!gameState.hasStarted || gameState.gameEnded || !soundUnlocked || sneezePlayed || gameStartTimestampMs === 0) {
+    return;
+  }
 
-  const gain = audioContext.createGain();
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.18, now + 0.03);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+  const elapsedSec = (performance.now() - gameStartTimestampMs) / 1000;
+  if (elapsedSec < sneezeDueSec) {
+    return;
+  }
 
-  osc.connect(gain);
-  gain.connect(masterAudioGain);
-  osc.start(now);
-  osc.stop(now + 0.35);
+  sneezePlayed = true;
+  playSneezeSound();
+}
+
+function updateFootsteps(delta) {
+  if (!controls.isLocked || gameState.isReadingNote || gameState.gameEnded) {
+    footstepsTimer = 0;
+    footstepsDistance = 0;
+    lastFootstepX = null;
+    lastFootstepZ = null;
+    return;
+  }
+
+  if (lastFootstepX === null || lastFootstepZ === null) {
+    lastFootstepX = camera.position.x;
+    lastFootstepZ = camera.position.z;
+    footstepsTimer = 0;
+    footstepsDistance = 0;
+    return;
+  }
+
+  const dx = camera.position.x - lastFootstepX;
+  const dz = camera.position.z - lastFootstepZ;
+  const movedDistance = Math.hypot(dx, dz);
+  lastFootstepX = camera.position.x;
+  lastFootstepZ = camera.position.z;
+
+  if (movedDistance < 0.0008) {
+    footstepsTimer = 0;
+    return;
+  }
+
+  footstepsTimer += delta;
+  footstepsDistance += movedDistance;
+
+  if (footstepsDistance >= 0.5 && footstepsTimer >= 0.22) {
+    footstepsTimer = 0;
+    footstepsDistance = 0;
+    playSound('footsteps', { volume: 0.2, rate: THREE.MathUtils.randFloat(0.92, 1.08) });
+  }
 }
 
 function onWindowResize() {
@@ -1078,9 +1607,13 @@ function animate() {
   requestAnimationFrame(animate);
 
   const delta = Math.min(clock.getDelta(), 0.1);
+
   updateMovement(delta);
+  updateRandomSneeze();
+  updateFootsteps(delta);
   updateDoorAnimation(delta);
   updateInteractionPrompt();
+  updateNarrativeProgress();
   updateJumpscares(delta);
 
   renderer.render(scene, camera);

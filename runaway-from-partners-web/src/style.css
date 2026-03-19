@@ -130,9 +130,9 @@ button:hover {
   font-size: 0.9rem;
 }
 
-#inventory {
+#inventory,
+#money {
   position: absolute;
-  left: 1rem;
   bottom: 1rem;
   padding: 0.55rem 0.7rem;
   border-radius: 8px;
@@ -142,10 +142,21 @@ button:hover {
   font-size: 0.88rem;
 }
 
+#inventory {
+  left: 1rem;
+}
+
+#money {
+  right: 1rem;
+  color: #e7ffd2;
+  border-color: rgba(148, 215, 141, 0.38);
+  background: rgba(11, 19, 10, 0.78);
+}
+
 #toast {
   position: absolute;
   left: 50%;
-  top: 14%;
+  top: 12%;
   transform: translateX(-50%);
   border-radius: 999px;
   border: 1px solid rgba(193, 89, 89, 0.35);
@@ -173,6 +184,12 @@ button:hover {
   text-shadow: 0 0 10px rgba(125, 228, 117, 0.35);
 }
 
+#flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(188, 18, 24, 0.35);
+}
+
 .note-card p {
   margin: 0 0 1.1rem;
   line-height: 1.5;
@@ -194,7 +211,21 @@ button:hover {
   }
 
   #dialogue {
-    bottom: 1.2rem;
+    bottom: 3.9rem;
     font-size: 0.9rem;
+  }
+
+  #inventory,
+  #money {
+    bottom: 1rem;
+    font-size: 0.8rem;
+  }
+
+  #inventory {
+    left: 0.5rem;
+  }
+
+  #money {
+    right: 0.5rem;
   }
 }

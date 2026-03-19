@@ -12,7 +12,7 @@
     <div id="menu" class="overlay">
       <div class="panel">
         <h1>Убеги от партнёров</h1>
-        <p class="lead">Проснись, осмотрись, найди записку и забери чемодан.</p>
+        <p id="menuLead" class="lead">Найди чемодан и выберись, пока не стало поздно.</p>
         <button id="startButton" type="button">Начать игру</button>
         <p class="hint">WASD — движение, мышь — обзор, F — взаимодействие, Esc/Tab — освободить курсор (удобно для Cmd+Tab на macOS)</p>
       </div>
@@ -22,8 +22,10 @@
       <div id="crosshair"></div>
       <div id="prompt" class="hidden"></div>
       <div id="inventory" class="hidden">Инвентарь: пусто</div>
+      <div id="money" class="hidden">Баланс: 0 €</div>
       <div id="toast" class="hidden"></div>
       <div id="dialogue" class="hidden"></div>
+      <div id="flash" class="hidden"></div>
     </div>
 
     <div id="noteOverlay" class="overlay hidden" aria-modal="true" role="dialog">
@@ -34,6 +36,14 @@
           Мы скоро придём......
         </p>
         <button id="closeNoteButton" type="button">Закрыть</button>
+      </div>
+    </div>
+
+    <div id="endingOverlay" class="overlay hidden" aria-modal="true" role="dialog">
+      <div class="panel">
+        <h2 id="endingTitle">Финал</h2>
+        <p id="endingText" class="lead"></p>
+        <button id="restartButton" type="button">Сыграть заново</button>
       </div>
     </div>
 
